@@ -18,7 +18,6 @@ git log --oneline origin/main..repkgs/main
 ### Single commit
 
 ```console
-git checkout main
 git cherry-pick <sha>
 ```
 
@@ -28,16 +27,8 @@ git cherry-pick <sha>
 git cherry-pick <oldest-sha>^..<newest-sha>
 ```
 
-### Upstream PR merges (e.g. 35a2314 Merge pull request...)
-
-```console
-git cherry-pick -m 1 <merge-sha>
-```
-
-`-m 1` keeps the main side as parent. Omit it and cherry-pick fails.
-
 ### Everything at once
 
 ```console
-git merge repkgs/main
+git merge repkgs/main --no-ff
 ```

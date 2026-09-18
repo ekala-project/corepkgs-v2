@@ -1,4 +1,4 @@
-# repkgs
+# corepkgs-v2 (repkgs fork)
 
 An experimental package set on stock Nix. It keeps the store and the language and changes what
 goes into a derivation. The *re-* is for relocatable, reproducible, and having another go at

@@ -128,49 +128,36 @@ let
   # `hash.merge = { default = "sha256-…"; }` re-read sources.toml under the new [pin]
   repinned = edit != null && sources0 != null && (edited ? pin || edited ? hash);
   sources = if repinned then sources0.repin (edited.pin or { }) (edited.hash or { }) else sources0;
-  # `completions.<shell>` (bash, zsh, fish, nu): completion files, like installShellFiles,
-  # desugared to `install` here. Source-relative paths install from the source tree;
-  # evaluator paths (./file next to package.nix, which arrive hash-prefixed) install
-  # under their original name. Explicit `install` entries win over generated ones.
-  completionDest =
-    shell:
+  # `completions.<shell> = [ files ]`, sugar for `install`: each file goes where that shell
+  # looks. bash and zsh find completions by command name (`<cmd>`, `_<cmd>`), fish and nu keep the
+  # file name. A ./path beside package.nix arrives with a store hash prefix, dropped here
+  completionDirs = {
+    bash = "share/bash-completion/completions";
+    zsh = "share/zsh/site-functions";
+    fish = "share/fish/vendor_completions.d";
+    nu = "share/nushell/vendor/autoload";
+  };
+  completionName =
+    shell: f:
     let
-      dir =
-        if shell == "bash" then
-          "share/bash-completion/completions"
-        else if shell == "zsh" then
-          "share/zsh/site-functions"
-        else if shell == "fish" then
-          "share/fish/vendor_completions.d"
-        else if shell == "nu" then
-          "share/nushell/vendor/autoload"
-        else
-          throw "completions: unknown shell ${shell} (have: bash zsh fish nu)";
-      leaf =
-        if shell == "zsh" then (stem: _: "_${stem}") else if shell == "bash" then (stem: _: stem) else (_: real: real);
+      m = match "([a-z0-9]{32}-)?((.*)\\.${shell}|.*)" (baseNameOf f);
+      stem = if elemAt m 2 != null then elemAt m 2 else elemAt m 1;
     in
-    f:
-    let
-      base = baseNameOf f;
-      unhashed = match "[a-z0-9]{32}-(.+)" base;
-      real = if unhashed == null then base else head unhashed;
-      m = match "(.*)\\.${shell}" real;
-    in
-    if m == null then
-      throw "completions.${shell}: ${f} does not end in .${shell}"
+    if shell == "bash" then
+      stem
+    else if shell == "zsh" then
+      (if match "_.*" stem != null then stem else "_" + stem)
     else
-      {
-        name = "${dir}/${leaf (head m) real}";
-        value = f;
-      };
+      elemAt m 1;
   completionsInstall =
     shells:
     listToAttrs (
       concatMap (
         shell:
-        map (completionDest shell) (
-          if isList shells.${shell} then shells.${shell} else throw "completions.${shell} is not a list"
-        )
+        map (f: {
+          name = "${completionDirs.${shell}}/${completionName shell f}";
+          value = f;
+        }) shells.${shell}
       ) (attrNames shells)
     );
   args =
@@ -193,10 +180,11 @@ let
       else
         edited
     )
-    // (if edited ? completions then
-      { install = completionsInstall edited.completions // (edited.install or { }); }
-    else
-      { }
+    // (
+      if edited ? completions then
+        { install = completionsInstall edited.completions // (edited.install or { }); }
+      else
+        { }
     );
   inherit (args) name;
   uses = args.uses or [ ];
@@ -218,12 +206,7 @@ let
       "ldflags"
       "hardening"
     ];
-    completions = [
-      "bash"
-      "zsh"
-      "fish"
-      "nu"
-    ];
+    completions = attrNames completionDirs;
   };
   subKeys =
     prefix: set:

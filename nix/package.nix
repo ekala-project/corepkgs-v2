@@ -71,6 +71,7 @@ let
     "debug"
     "install"
     "links"
+    "completions"
   ];
 
   # the part of every derivation that is the same across the set: built once
@@ -127,6 +128,51 @@ let
   # `hash.merge = { default = "sha256-…"; }` re-read sources.toml under the new [pin]
   repinned = edit != null && sources0 != null && (edited ? pin || edited ? hash);
   sources = if repinned then sources0.repin (edited.pin or { }) (edited.hash or { }) else sources0;
+  # `completions.<shell>` (bash, zsh, fish, nu): completion files, like installShellFiles,
+  # desugared to `install` here. Source-relative paths install from the source tree;
+  # evaluator paths (./file next to package.nix, which arrive hash-prefixed) install
+  # under their original name. Explicit `install` entries win over generated ones.
+  completionDest =
+    shell:
+    let
+      dir =
+        if shell == "bash" then
+          "share/bash-completion/completions"
+        else if shell == "zsh" then
+          "share/zsh/site-functions"
+        else if shell == "fish" then
+          "share/fish/vendor_completions.d"
+        else if shell == "nu" then
+          "share/nushell/vendor/autoload"
+        else
+          throw "completions: unknown shell ${shell} (have: bash zsh fish nu)";
+      leaf =
+        if shell == "zsh" then (stem: _: "_${stem}") else if shell == "bash" then (stem: _: stem) else (_: real: real);
+    in
+    f:
+    let
+      base = baseNameOf f;
+      unhashed = match "[a-z0-9]{32}-(.+)" base;
+      real = if unhashed == null then base else head unhashed;
+      m = match "(.*)\\.${shell}" real;
+    in
+    if m == null then
+      throw "completions.${shell}: ${f} does not end in .${shell}"
+    else
+      {
+        name = "${dir}/${leaf (head m) real}";
+        value = f;
+      };
+  completionsInstall =
+    shells:
+    listToAttrs (
+      concatMap (
+        shell:
+        map (completionDest shell) (
+          if isList shells.${shell} then shells.${shell} else throw "completions.${shell} is not a list"
+        )
+      ) (attrNames shells)
+    );
   args =
     (
       if sources == null then
@@ -146,6 +192,11 @@ let
         ]
       else
         edited
+    )
+    // (if edited ? completions then
+      { install = completionsInstall edited.completions // (edited.install or { }); }
+    else
+      { }
     );
   inherit (args) name;
   uses = args.uses or [ ];
@@ -166,6 +217,12 @@ let
       "cxxflags"
       "ldflags"
       "hardening"
+    ];
+    completions = [
+      "bash"
+      "zsh"
+      "fish"
+      "nu"
     ];
   };
   subKeys =
@@ -189,7 +246,8 @@ let
   unknownFields =
     filter (k: args.${k} != { }) (attrNames (removeAttrs args (reserved ++ uses)))
     ++ (if args ? tests then subKeys "tests" args.tests else [ ])
-    ++ (if args ? cc then subKeys "cc" args.cc else [ ]);
+    ++ (if args ? cc then subKeys "cc" args.cc else [ ])
+    ++ (if args ? completions then subKeys "completions" args.completions else [ ]);
   # a library among the build tools or a tool among the libraries: natively both platforms
   # coincide and nothing would notice, so it is checked here
   wrongPlatform =

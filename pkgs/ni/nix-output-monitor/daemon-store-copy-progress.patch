@@ -1,0 +1,31 @@
+Track copies into the daemon store as downloads/uploads.
+
+Nix reports the store of a daemon-connected client as `daemon`, so e.g.
+`nix copy --from ssh-ng://...` (and any `nix build` run through the
+daemon) logs
+
+  copying path '/nix/store/...' from 'ssh-ng://...' to 'daemon'
+
+i.e. a CopyPath activity whose destination parses to `Host _ _ "daemon"`.
+`parseHost` only recognised "", local, local://, unix and unix:// as
+`Localhost`, so none of the `CopyPath ... Localhost` cases in `NOM.Update`
+matched: the transfer was never entered into runningDownloads (nor
+runningUploads for `nix copy --to`), its Progress results went nowhere,
+and nom showed the copy as a bare line with no progress bar.
+
+Treat `daemon` as `Localhost`. Display is unaffected (a Localhost peer
+renders as no host label) and the `Build ... on <host>` matching is
+untouched: builder hostnames never parse to this.
+
+diff --git a/nix-output-monitor/lib/NOM/Builds.hs b/nix-output-monitor/lib/NOM/Builds.hs
+--- a/nix-output-monitor/lib/NOM/Builds.hs
++++ b/nix-output-monitor/lib/NOM/Builds.hs
+@@ -76,7 +76,7 @@ parseIndentedStoreObject = either fail pure . TextParser.parseOnly indentedStor
+ 
+ parseHost :: Text -> Host WithContext
+ parseHost hostname
+-  | hostname `elem` ["", "local", "local://", "unix", "unix://"] = Localhost
++  | hostname `elem` ["", "local", "local://", "unix", "unix://", "daemon"] = Localhost
+   | otherwise = Host proto user host
+  where
+   (proto, (user, host)) = second (breakOnMaybe "@") $ breakOnMaybe "://" hostname

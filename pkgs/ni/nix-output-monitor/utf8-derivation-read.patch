@@ -22,7 +22,7 @@ diff --git a/nix-output-monitor/lib/NOM/Update/Monad.hs b/nix-output-monitor/lib
  import Data.Set qualified as Set
 -import Data.Text.IO qualified as TextIO
 +import Data.Text.Encoding (decodeUtf8With)
-+import Data.Text.Encoding.Error (lenient)
++import Data.Text.Encoding.Error (lenientDecode)
  import Data.Time (UTCTime, getCurrentTime)
  import GHC.Clock qualified
  import NOM.Builds (Derivation, Host, HostContext (WithContext), StorePath)
@@ -35,6 +35,6 @@ diff --git a/nix-output-monitor/lib/NOM/Update/Monad.hs b/nix-output-monitor/lib
      pure $ case content of
        Left err -> Left (DerivationReadError err)
 -      Right text -> case parseOnly NomDrv.parseDerivation text of
-+      Right bytes -> case parseOnly NomDrv.parseDerivation (decodeUtf8With lenient bytes) of
++      Right bytes -> case parseOnly NomDrv.parseDerivation (decodeUtf8With lenientDecode bytes) of
          Left parseErr -> Left (DerivationParseError (toText drv <> ": " <> toText parseErr))
          Right parsed -> Right parsed

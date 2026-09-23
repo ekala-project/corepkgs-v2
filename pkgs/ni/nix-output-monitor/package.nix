@@ -73,5 +73,15 @@ package {
     # .drv files are always UTF-8; TextIO.readFile decodes with the process
     # locale and throws under a C locale (nh --build-host over ssh).
     ./utf8-derivation-read.patch
+    # Dynamic derivations resolve to the derivation that is built instead:
+    # retire the unresolved node on nix's `resolved derivation` notice (with
+    # a brief completed tick) so pending counts and the graph converge on
+    # the resolved one; also adds a resolved counter and `resolved from`
+    # row annotations.
+    ./resolved-derivation-pending.patch
+    # The daemon store reports itself as `daemon`, which parseHost did not
+    # recognise as localhost: copies to/from it (nix copy, remote-builder
+    # outputs) never entered runningDownloads/Uploads and showed no bar.
+    ./daemon-store-copy-progress.patch
   ];
 }

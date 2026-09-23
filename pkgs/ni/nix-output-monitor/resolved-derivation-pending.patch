@@ -1,0 +1,228 @@
+Drop resolved dynamic derivations from pending and keep graphing.
+
+Nix announces dynamic-derivation resolution as a BuildWaiting activity
+carrying `resolved derivation: '<old>.drv' -> '<new>.drv'` as its text
+(see DerivationResolutionGoal::resolveDerivation in nix).
+
+The unresolved derivation entered pending via the plan listing, but only
+the resolved one ever runs (showing up via its own Build activity).
+Moreover the resolved .drv file often lives only on a remote builder, so
+nom can not read links for it: without handling, the unresolved entry
+sits in pending forever and the resolved one renders as a disconnected
+root, i.e. the graph goes flat.
+
+On that notice, retire the old node and let the new one take over its
+graph position: dependents are rewired from old to new, and when the new
+node has no links of its own (its file could not be read) it inherits
+the old node's inputs. A planned node additionally shows as completed
+for a few seconds so the handoff is perceptible instead of instant.
+Retired ids stay remembered so a late plan listing can not resurrect
+them, and as provenance for the `resolved from` row annotation and the
+resolved counter in the summary bar. Summaries follow through the
+existing propagation (the old footprint leaves with the pending state,
+the new one is inserted under the new parents; sets make this idempotent
+and later transitions converge deterministically).
+
+diff --git a/nix-output-monitor/lib/NOM/Update.hs b/nix-output-monitor/lib/NOM/Update.hs
+--- a/nix-output-monitor/lib/NOM/Update.hs
++++ b/nix-output-monitor/lib/NOM/Update.hs
+@@ -98,6 +98,7 @@
+     assign' #touchedIds mempty
+   when (Strict.isJust currentState.evaluationState.lastFileName && currentState.evaluationState.at <= now - 5 && currentState.fullSummary /= mempty) do
+     assign' (#evaluationState % #lastFileName) Strict.Nothing
++  sweepRetiredDerivations now
+ 
+ {-# INLINE updateStateNixJSONMessage #-}
+ updateStateNixJSONMessage :: forall m. (UpdateMonad m) => NixJSONMessage -> NOMState -> m (([NOMError], ByteString), Maybe NOMState)
+@@ -261,7 +262,12 @@
+           _ -> noChange
+       JSON.Unknown | Text.isPrefixOf "querying info" startAction.text -> set_interesting
+       JSON.QueryPathInfo{} -> set_interesting
+-      _ -> noChange -- tell [Right (encodeUtf8 (markup yellow "unused activity: " <> show startAction.id <> " " <> show startAction.activity))]
++      -- A dynamic derivation resolved to the derivation that is built
++      -- instead (nix reports this as a BuildWaiting activity): retire
++      -- the old node so pending and the graph converge on the new one.
++      JSON.BuildWaiting | Just (oldDrv, newDrv) <- parseResolvedDerivation startAction.text -> withChange do
++        resolveDerivation oldDrv newDrv
++      _ -> noChange -- tell [Right (encodeUtf8 (markup yellow "unused activity: " <> show startAction.id <> " " <> show startAction.activity)))]
+     when changed $ modifying' #activities $ Map.insert id'.value (MkActivityStatus startAction.activity startAction.parent Strict.Nothing Strict.Nothing)
+     pure changed
+   Stop MkStopAction{id = id'} -> do
+@@ -438,13 +444,84 @@
+   when noParents $ modifying' #forestRoots (CSet.insert drvId)
+ 
+ planBuilds :: (MonadNOMState m) => Set DerivationId -> m ()
+-planBuilds drvIds = forM_ drvIds \drvId ->
+-  updateDerivationState drvId (const Planned)
++planBuilds drvIds = do
++  -- Retired dynamic derivations never build: a late plan listing
++  -- must not resurrect them into pending.
++  retired <- gets (.retiredDerivations)
++  forM_ drvIds \drvId ->
++    unless (Map.member drvId retired) $ updateDerivationState drvId (const Planned)
+ 
+ planDownloads :: (MonadNOMState m) => Set StorePathId -> m ()
+ planDownloads pathIds = forM_ pathIds \pathId ->
+   upsertStorePathState pathId DownloadPlanned (const Nothing)
+ 
++-- | How long a retired derivation shows as completed before it is swept.
++retiredTickSeconds :: Double
++retiredTickSeconds = 3
++
++-- | Parse nix's dynamic-derivation resolution notice:
++-- `resolved derivation: '<old>.drv' -> '<new>.drv'`.
++parseResolvedDerivation :: Text -> Maybe (Derivation, Derivation)
++parseResolvedDerivation message = do
++  rest <- Text.stripPrefix "resolved derivation: '" message
++  let (oldPath, arrowAndNew) = Text.breakOn "' -> '" rest
++  newPathQuoted <- Text.stripPrefix "' -> '" arrowAndNew
++  newPath <- Text.stripSuffix "'" newPathQuoted
++  guard (not (Text.null oldPath) && not (Text.null newPath))
++  oldDrv <- either (const Nothing) Just (parseDerivation oldPath)
++  newDrv <- either (const Nothing) Just (parseDerivation newPath)
++  pure (oldDrv, newDrv)
++
++-- | Retire a resolved dynamic derivation: the new node takes over the old
++-- one's graph position (dependents, and inputs when the new node has none
++-- of its own because its .drv file could not be read). A planned node
++-- additionally shows as completed for `retiredTickSeconds` so the handoff
++-- is perceptible instead of instant. Nodes that already started, failed
++-- or finished keep their status, only dependents move. Retired ids stay
++-- remembered so a late plan listing can not resurrect them.
++resolveDerivation :: Derivation -> Derivation -> ProcessingT m ()
++resolveDerivation oldDrv newDrv = do
++  oldDrvId <- getDerivationId oldDrv
++  newDrvId <- getDerivationId newDrv
++  when (oldDrvId /= newDrvId) do
++    now <- getNow
++    oldInfo <- getDerivationInfos oldDrvId
++    newInfo <- getDerivationInfos newDrvId
++    forM_ (CSet.toList oldInfo.derivationParents) \parentId ->
++      modifying' #derivationInfos $ CMap.adjust (#inputDerivations %~ fmap (swapInput oldDrvId newDrvId)) parentId
++    modifying' #derivationInfos $ CMap.adjust (#derivationParents %~ CSet.union oldInfo.derivationParents) newDrvId
++    when (newInfo.inputDerivations == mempty) do
++      modifying' #derivationInfos $ CMap.adjust (#inputDerivations .~ oldInfo.inputDerivations) newDrvId
++      forM_ (CSet.toList (childIds oldInfo)) \childId ->
++        modifying' #derivationInfos $ CMap.adjust (#derivationParents %~ CSet.insert newDrvId) childId
++    newParents <- (.derivationParents) <$> getDerivationInfos newDrvId
++    if CSet.null newParents
++      then modifying' #forestRoots $ CSet.insert newDrvId
++      else modifying' #forestRoots $ CSet.delete newDrvId
++    updateParents False (updateSummaryForDerivation Unknown newInfo.buildStatus newDrvId) id newParents
++    modifying' #touchedIds $ CSet.insert newDrvId
++    when (oldInfo.buildStatus == Planned) do
++      updateDerivationState oldDrvId (const (Built (MkBuildInfo now Localhost Strict.Nothing Strict.Nothing now)))
++    modifying' #retiredDerivations $ Map.insert oldDrvId (now + retiredTickSeconds)
++    modifying' #resolvedFrom $ Map.insert newDrv oldDrv
++ where
++  swapInput oldId newId input = if input.derivation == oldId then input{derivation = newId} else input
++  childIds info = CSet.fromFoldable (fmap (.derivation) info.inputDerivations)
++
++-- | Sweep retired derivations whose tick expired: drop them. Runs every
++-- frame from `maintainState`, so ticks vanish on time even when idle.
++sweepRetiredDerivations :: Double -> State NOMState ()
++sweepRetiredDerivations now = do
++  retired <- gets (.retiredDerivations)
++  forM_ (Map.toList retired) \(drvId, expiry) -> when (expiry <= now) do
++    info <- getDerivationInfos drvId
++    case info.buildStatus of
++      Building _ -> pure ()
++      Failed _ -> pure ()
++      _ -> do
++        updateDerivationState drvId (const Unknown)
++        modifying' #forestRoots $ CSet.delete drvId
++
+ finishBuildByDrvId :: Host WithContext -> DerivationId -> ProcessingT m ()
+ finishBuildByDrvId host drvId = do
+   buildInfoMay <- getBuildInfoIfRunning drvId
+diff --git a/nix-output-monitor/lib/NOM/State.hs b/nix-output-monitor/lib/NOM/State.hs
+--- a/nix-output-monitor/lib/NOM/State.hs
++++ b/nix-output-monitor/lib/NOM/State.hs
+@@ -258,6 +258,12 @@
+   , buildPlatform :: Strict.Maybe Text
+   , interestingActivities :: Map Word InterestingActivity
+   , evaluationState :: EvalInfo
++  -- Retired dynamic derivations: id -> tick expiry time. Entries
++  -- persist so a late plan listing can not resurrect them; the tick
++  -- itself is swept by `sweepRetiredDerivations` in `maintainState`.
++  , retiredDerivations :: Map DerivationId Double
++  -- Resolution provenance for the row annotation: new -> old.
++  , resolvedFrom :: Map Derivation Derivation
+   }
+   deriving stock (Eq, Show)
+ 
+diff --git a/nix-output-monitor/lib/NOM/State/Initial.hs b/nix-output-monitor/lib/NOM/State/Initial.hs
+--- a/nix-output-monitor/lib/NOM/State/Initial.hs
++++ b/nix-output-monitor/lib/NOM/State/Initial.hs
+@@ -27,3 +27,5 @@
+       (Strict.toStrict platform)
+       mempty
+       MkEvalInfo{count = 0, at = 0, lastFileName = Strict.Nothing}
++      mempty
++      mempty
+diff --git a/nix-output-monitor/lib/NOM/Print.hs b/nix-output-monitor/lib/NOM/Print.hs
+--- a/nix-output-monitor/lib/NOM/Print.hs
++++ b/nix-output-monitor/lib/NOM/Print.hs
+@@ -101,6 +101,9 @@
+ -- | U+2211 N-ARY SUMMATION
+ bigsum = "∑"
+ 
++-- | U+21C4 LEFT RIGHT ARROW, dynamic derivations resolved upstream
++resolved = "⇄"
++
+ {- |
+ >>> import Relude
+ >>> showCond True "foo"
+@@ -219,7 +222,7 @@
+   innerTable :: [NonEmpty Entry]
+   innerTable = fromMaybe (one (text "")) (nonEmpty headers) : showCond showHosts printHosts
+   headers =
+-    (cells 3 <$> optHeader showBuilds "Builds")
++    (cells 4 <$> optHeader showBuilds "Builds")
+       <> (cells 3 <$> optHeader showDownloads "Downloads")
+       <> (cells 2 <$> optHeader showUploads "Uploads")
+       <> optHeader showHosts "Host"
+@@ -230,6 +233,7 @@
+       [ yellow $ nonZeroBold running numRunningBuilds
+       , green $ nonZeroBold done numCompletedBuilds
+       , blue $ nonZeroBold todo numPlannedBuilds
++      , magenta $ nonZeroBold resolved numResolvedBuilds
+       ]
+       <> showCond
+         showDownloads
+@@ -260,6 +264,7 @@
+   numRunningBuilds = CMap.size runningBuilds
+   numCompletedBuilds = CMap.size completedBuilds
+   numPlannedBuilds = CSet.size plannedBuilds
++  numResolvedBuilds = Map.size retiredDerivations
+   totalBuilds = numPlannedBuilds + numRunningBuilds + numCompletedBuilds
+   downloadsDone = CMap.size completedDownloads
+   downloadsRunning = CMap.size runningDownloads
+@@ -563,6 +568,9 @@
+         plannedDownloads = store_paths_in drvInfo.dependencySummary.plannedDownloads
+         downloadedOutputs = store_paths_in_map drvInfo.dependencySummary.completedDownloads
+         uploadedOutputs = store_paths_in_map drvInfo.dependencySummary.completedUploads
++        resolvedNote = case Map.lookup drvInfo.name nomState.resolvedFrom of
++          Just oldDrv -> [markup grey ("resolved from " <> Text.take 8 oldDrv.storePath.hash)]
++          Nothing -> []
+      in -- This code for printing info about every output proved to be to verbose. Keeping it in case we want something like that later on, maybe as an option.
+         -- store_path_info_list =
+         --  ((\(name, infos) now -> markups [bold, yellow] (running <> " " <> name <> " " <> down) <> " " <> markup magenta (disambiguate_transfer_host infos.host) <> clock <> " " <> timeDiff now infos.start) <$> store_paths_in_map drvInfo.dependencySummary.runningDownloads)
+@@ -629,7 +637,7 @@
+                 , const Nothing
+                 )
+             | otherwise -> (False, const drvName, const Nothing)
+-          Planned -> (True, const $ markup blue (todo <> " " <> drvName), const Nothing)
++          Planned -> (True, const $ unwords (markup blue (todo <> " " <> drvName) : resolvedNote), const Nothing)
+           Building buildInfo ->
+             let phaseList = case phaseMay buildInfo.activityId of
+                   Nothing -> []
+@@ -641,7 +649,7 @@
+                 after_time = Strict.maybe [] (\x -> ["(" <> average <> " " <> timeDiffSeconds x <> ")"]) buildInfo.estimate
+                 (transfer_percentage, transfer_progress) = printTransferProgress (transfersMay buildInfo.activityId)
+              in ( False
+-                , \now -> unwords $ before_time <> ifTimeDiffRelevant now buildInfo.start (<> after_time) <> transfer_progress
++                , \now -> unwords $ before_time <> ifTimeDiffRelevant now buildInfo.start (<> after_time) <> transfer_progress <> resolvedNote
+                 , const transfer_percentage
+                 )
+           Failed buildInfo ->

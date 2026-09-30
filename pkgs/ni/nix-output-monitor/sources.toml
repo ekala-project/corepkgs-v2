@@ -1,18 +1,16 @@
 [upstream]
-purl = "pkg:github/maralorn/nix-output-monitor"
-
-[watch]
-url = "https://github.com/maralorn/nix-output-monitor/tags"
-regex = 'v([0-9.]+)\.tar\.gz'
+purl = "pkg:github/qweered/nix-output-monitor?branch=main"
 
 [locks]
 hackage = "."
 
 [[source]]
 key = "default"
-url = "https://github.com/maralorn/nix-output-monitor/archive/refs/tags/v{version}.tar.gz"
-hash = "sha256-1GYwwPvuyPbOC4T+F/+AfNoUYNe1HJwNKviTyBlXFJM="
+url = "https://github.com/qweered/nix-output-monitor/archive/{rev}.tar.gz"
+hash = "sha256-sjBrkr3MoJZrU7QXcjVRAnnlCnAkc2j1L1VYEw0QCJI="
 
 [pin]
-version = "2.2.0"
+version = "2.2.0-unstable-2026-09-30"
+date = "2026-09-30"
+rev = "687f65dcd18fd5e508c4fd0736b8361574bfdfeb"
 sys = ["zlib"]

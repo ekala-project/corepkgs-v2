@@ -18,6 +18,7 @@ package {
   # include as editor-only: libstdc++ provides it transitively, libc++ does
   # not, so std::inserter fails to compile. Prefer a patched unpack as a
   # local package; hackage revisions cannot change sources.
+  # TODO: patch this globally instead
   phases.before."cabal.build" = {
     name = "hermes-include";
     run = ''
@@ -32,12 +33,15 @@ package {
   };
   bin = [ "nom" ];
   # test suites need HUnit/doctest-parallel, outside the dependency-only freeze
+  # TODO: add them to lockfile automatically too
   tests.run = false;
-  # argv[0] dispatch: nom-build/nom-shell behave as nix-build/nix-shell
+  # TODO: set version manually cause its unstable
+  tests.version = false;
   links = {
     "bin/nom-build" = "nom";
     "bin/nom-shell" = "nom";
   };
+  # TODO: make this automatic
   completions = {
     bash = [
       "nix-output-monitor/completions/nom.bash"
@@ -52,36 +56,4 @@ package {
     fish = [ "nix-output-monitor/completions/nom.fish" ];
     nu = [ ./nom-completions.nu ];
   };
-  patches = [
-    # Tolerate floating-CA/deferred/impure/dynamic derivations instead of
-    # DerivationParseError "string"; drops nix-derivation.
-    # https://github.com/maralorn/nix-output-monitor/issues/167
-    ./content-addressed-derivations.patch
-    # FetchToStore activity/result from nix 2.36pre.
-    # https://github.com/maralorn/nix-output-monitor/pull/313
-    ./upstream-fetch-to-store-nix-2.36.patch
-    # Forest roots in a set, fixes quadratic slowdown.
-    # https://github.com/maralorn/nix-output-monitor/pull/304
-    ./upstream-fix-quadratic-slowdown.patch
-    # FileTransfer progress bars (rebased, must apply after /pull/313).
-    # https://github.com/maralorn/nix-output-monitor/pull/314
-    ./upstream-filetransfer-progress.patch
-    # Remote store: .drv only exists remotely (--store ssh-ng://... with
-    # --eval-store auto). Skip graph expansion silently instead of
-    # DerivationReadError spam. https://github.com/maralorn/nix-output-monitor/issues/175
-    ./remote-store-missing-drv.patch
-    # .drv files are always UTF-8; TextIO.readFile decodes with the process
-    # locale and throws under a C locale (nh --build-host over ssh).
-    ./utf8-derivation-read.patch
-    # Dynamic derivations resolve to the derivation that is built instead:
-    # retire the unresolved node on nix's `resolved derivation` notice (with
-    # a brief completed tick) so pending counts and the graph converge on
-    # the resolved one; also adds a resolved counter and `resolved from`
-    # row annotations.
-    ./resolved-derivation-pending.patch
-    # The daemon store reports itself as `daemon`, which parseHost did not
-    # recognise as localhost: copies to/from it (nix copy, remote-builder
-    # outputs) never entered runningDownloads/Uploads and showed no bar.
-    ./daemon-store-copy-progress.patch
-  ];
 }

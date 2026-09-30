@@ -7,10 +7,10 @@ hackage = "."
 [[source]]
 key = "default"
 url = "https://github.com/qweered/nix-output-monitor/archive/{rev}.tar.gz"
-hash = "sha256-sjBrkr3MoJZrU7QXcjVRAnnlCnAkc2j1L1VYEw0QCJI="
+hash = "sha256-vaOAXpaEtAuVE76IaliwKT8zpNttzN3ja3wvRozKmnA="
 
 [pin]
 version = "2.2.0-unstable-2026-09-30"
 date = "2026-09-30"
-rev = "687f65dcd18fd5e508c4fd0736b8361574bfdfeb"
+rev = "0014da1ab4277b86ea9c58cc8f56fe6a20fe9f21"
 sys = ["zlib"]

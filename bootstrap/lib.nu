@@ -68,7 +68,9 @@ export def read-list [file: path]: nothing -> list<string> { open --raw $file | 
 #   cxxflags       what c++ adds on top. Absent: -stdlib=libc++
 export def cc-facts [out: path, facts: record]: nothing -> nothing {
   mkdir $"($out)/etc/cc"
-  $facts | items {|k, v| $v | str join "\n" | $in + "\n" | save -f $"($out)/etc/cc/($k)" }
+  # trailing `ignore`: items returns its closures' values, which nu would display as a table
+  # (and fail to at width 0: builders have no terminal, "Couldn't fit table into 0 columns!")
+  $facts | items {|k, v| $v | str join "\n" | $in + "\n" | save -f $"($out)/etc/cc/($k)" } | ignore
 }
 
 export def cc-fact [libc: path, name: string]: nothing -> oneof<list<string>, nothing> {

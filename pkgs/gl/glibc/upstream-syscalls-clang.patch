@@ -1,0 +1,17 @@
+COMPILE.S carries -c for assembling, but asm_CPP only preprocesses (-E).
+clang warns once per syscalls.list, ~30 times in install-headers:
+  clang: warning: argument unused during compilation: '-c'
+GCC silently accepts -c with -E. Strip -c for the preprocessor invocation.
+
+diff --git a/sysdeps/unix/Makefile b/sysdeps/unix/Makefile
+--- a/sysdeps/unix/Makefile
++++ b/sysdeps/unix/Makefile
+@@ -97,7 +97,7 @@ $(common-objpfx)sysd-syscalls: $(..)sysdeps/unix/make-syscalls.sh \
+ 	for dir in $(+sysdep_dirs); do \
+ 	  test -f $$dir/syscalls.list && \
+ 	  { sysdirs='$(sysdirs)' \
+-	    asm_CPP='$(COMPILE.S) -E -x assembler-with-cpp' \
++	    asm_CPP='$(filter-out -c,$(COMPILE.S)) -E -x assembler-with-cpp' \
+ 	    $(SHELL) $(dir $<)$(notdir $<) $$dir || exit 1; }; \
+ 	  test $$dir = $(..)sysdeps/unix && break; \
+ 	done > $@T

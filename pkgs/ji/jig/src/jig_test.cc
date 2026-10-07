@@ -223,8 +223,8 @@ void TestParseInvocation() {
 
 void TestSearchDirs() {
   const std::string clang = "programs: =/cc/bin\nlibraries: =/cc/lib/clang/23:/sysroot/lib\n";
-  const std::vector<std::string> ld = {"-L/deps/zlib/lib", "-Wl,-z,now", "-L/deps/xz/lib"};
-  assert(jig::WithPackageLibDirs(clang, ld) ==
+  const std::vector<std::string> ldflags = {"-L/deps/zlib/lib", "-Wl,-z,now", "-L/deps/xz/lib"};
+  assert(jig::WithPackageLibDirs(clang, ldflags) ==
          "programs: =/cc/bin\nlibraries: =/cc/lib/clang/23:/sysroot/lib:/deps/zlib/lib:/deps/xz/lib\n");
   assert(jig::WithPackageLibDirs(clang, {}) == clang);
 }

@@ -2,7 +2,6 @@
   package,
   buildPkgs,
   platform,
-  on,
 }:
 package {
   name = "nasm";

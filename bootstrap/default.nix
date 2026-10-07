@@ -98,6 +98,7 @@ let
         "upstream-const-generic-extension.patch"
         "glibc-loongarch-rtld-bcmp.patch"
         "upstream-ldbl128-literal.patch"
+        "upstream-syscalls-clang.patch"
       ];
     };
   };

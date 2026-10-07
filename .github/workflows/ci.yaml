@@ -1,0 +1,29 @@
+name: fmt and eval
+# Lightweight checks on every PR and push to main: formatting is clean
+# (`nix fmt -- --ci` runs the treefmt wrapper in check mode) and the whole
+# set evaluates. No builds; .#checks is what nixbot builds.
+on:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read # let hestia detect evicted cache entries upfront
+    steps:
+      - uses: actions/checkout@v7
+      - uses: DeterminateSystems/nix-installer-action@v23
+        with:
+          extra-conf: extra-experimental-features = nix-command flakes ca-derivations dynamic-derivations
+      - uses: Mic92/hestia@v3
+      - parallel:
+          - name: fmt
+            run: nix fmt -- --ci
+          # eval (no builds) of everything nixbot would build on every system:
+          # every supported package, tests and the seed. Plain .#packages does
+          # not evaluate: platform-gated entries (e.g. libiconv on linux) throw
+          # on access, and checks.nix already filters those via .supported.
+          - name: eval
+            run: nix eval --json .#checks > /dev/null
